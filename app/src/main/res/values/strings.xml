@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">智能记账</string>
+    <string name="tile_listener_connected">监听正常</string>
+    <string name="tile_listener_recovering">正在恢复</string>
+    <string name="tile_listener_disabled">未开启监听</string>
+    <string name="tile_listener_unknown">状态未知</string>
+    <string name="tile_listener_description">%1$s，%2$s</string>
+    <string name="tile_add_action">添加状态磁贴到控制中心</string>
+    <string name="tile_add_requesting">已向系统请求添加，请在系统弹窗中确认；若没有弹窗，请反馈此现象。</string>
+    <string name="tile_add_success">系统已确认添加。请下拉控制中心查看“智能记账”磁贴。</string>
+    <string name="tile_add_already">系统提示磁贴已添加。请检查控制中心的其他页面。</string>
+    <string name="tile_add_not_added">系统未添加磁贴，可能是取消了添加或系统限制。若未主动取消，请反馈此提示。</string>
+    <string name="tile_add_foreground">请保持智能记账在前台，再点击添加。</string>
+    <string name="tile_add_in_progress">已有添加请求等待处理，请先完成系统弹窗。</string>
+    <string name="tile_add_manually">当前 Android 版本需手动添加：展开控制中心，编辑快捷开关，添加“智能记账”。</string>
+    <string name="tile_add_unavailable">系统无法发起磁贴添加请求。请反馈此提示。</string>
+    <string name="tile_add_error">系统未能添加磁贴（返回码 %1$d）。请反馈此提示以便排查。</string>
     <string name="tab_home">首页</string>
     <string name="tab_record">记账</string>
     <string name="tab_statistics">统计</string>

@@ -1,8 +1,13 @@
 package com.smartledger.ui.settings
 
+import android.app.StatusBarManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.net.Uri
+import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,9 +24,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.smartledger.R
+import com.smartledger.service.ListenerTileService
 import com.smartledger.ui.theme.SmartLedgerColors
 import com.smartledger.ui.theme.ThemeManager
 import com.smartledger.ui.theme.ThemeMode
@@ -49,6 +57,7 @@ fun SettingsScreen(
     var confirmAllAuto by remember {
         mutableStateOf(prefs.getBoolean("confirm_all_auto", false))
     }
+    var tileAddMessage by remember { mutableStateOf<String?>(null) }
 
     // 检查更新状态（版本号读安装包，勿写死）
     val appVersionLabel = remember {
@@ -261,6 +270,23 @@ fun SettingsScreen(
                                 prefs.edit().putBoolean("confirm_all_auto", enabled).apply()
                             }
                         )
+                        DividerLine()
+                        MenuSettingItem(
+                            icon = Icons.Outlined.GridView,
+                            label = stringResource(R.string.tile_add_action),
+                            onClick = {
+                                tileAddMessage = context.getString(R.string.tile_add_requesting)
+                                requestListenerTile(context) { tileAddMessage = it }
+                            }
+                        )
+                        tileAddMessage?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SmartLedgerColors.fgSecondary,
+                                modifier = Modifier.padding(start = 52.dp, end = 16.dp, bottom = 12.dp)
+                            )
+                        }
                         DividerLine()
                         MenuSettingItem(
                             icon = Icons.Outlined.Notifications,
@@ -631,6 +657,42 @@ private fun DividerLine() {
         color = SmartLedgerColors.border,
         thickness = 0.5.dp
     )
+}
+
+private fun requestListenerTile(context: Context, onResult: (String) -> Unit) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        onResult(context.getString(R.string.tile_add_manually))
+        return
+    }
+    try {
+        val manager = context.getSystemService(StatusBarManager::class.java)
+        if (manager == null) {
+            onResult(context.getString(R.string.tile_add_unavailable))
+            return
+        }
+        manager.requestAddTileService(
+            ComponentName(context, ListenerTileService::class.java),
+            context.getString(R.string.app_name),
+            Icon.createWithResource(context, R.drawable.ic_stat_notification),
+            context.mainExecutor
+        ) { result ->
+            val message = when (result) {
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> R.string.tile_add_success
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> R.string.tile_add_already
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> R.string.tile_add_not_added
+                StatusBarManager.TILE_ADD_REQUEST_ERROR_APP_NOT_IN_FOREGROUND -> R.string.tile_add_foreground
+                StatusBarManager.TILE_ADD_REQUEST_ERROR_REQUEST_IN_PROGRESS -> R.string.tile_add_in_progress
+                else -> null
+            }
+            onResult(
+                if (message != null) context.getString(message)
+                else context.getString(R.string.tile_add_error, result)
+            )
+        }
+    } catch (e: Exception) {
+        Log.w("ListenerTile", "Cannot request tile placement", e)
+        onResult(context.getString(R.string.tile_add_unavailable))
+    }
 }
 
 private fun openNotificationListenerSettings(context: Context) {

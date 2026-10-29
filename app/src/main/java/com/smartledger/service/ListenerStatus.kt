@@ -8,6 +8,8 @@ import android.os.Build
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -39,6 +41,11 @@ object ListenerStatus {
     /** 进程内实时状态，避免仅依赖 SharedPreferences 误判 */
     private val binderConnected = AtomicBoolean(false)
     private val lastForceAt = AtomicLong(0L)
+
+    // 磁贴只信任本进程确认过的状态；null 表示尚未确认或服务已销毁。
+    // 不读取历史 prefs，也不改变原有保活/重连使用的 binderConnected。
+    private val tileConnection = MutableStateFlow<Boolean?>(null)
+    val connectionState = tileConnection.asStateFlow()
 
     fun isEnabledInSettings(context: Context): Boolean {
         // API 27+：官方接口更可靠
@@ -78,6 +85,7 @@ object ListenerStatus {
         } else {
             prefs.edit().putBoolean(KEY_CONNECTED, false).apply()
         }
+        tileConnection.value = connected
         // 状态未变时不刷新保活通知，避免每条系统通知都打一次 NotificationManager
         if (was == connected) return
         Log.d(TAG, "connected=$connected")
@@ -85,6 +93,10 @@ object ListenerStatus {
             KeepAliveService.refreshNotification(context)
         } catch (_: Exception) {
         }
+    }
+
+    fun markConnectionUnknown() {
+        tileConnection.value = null
     }
 
     /**

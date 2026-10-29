@@ -115,6 +115,7 @@ class PaymentNotificationListener : NotificationListenerService() {
 
     override fun onDestroy() {
         // 服务销毁 ≠ 权限撤销；勿标断开，否则冷启动/组件抖动会一直显示「已断开」
+        ListenerStatus.markConnectionUnknown()
         scope.cancel()
         super.onDestroy()
     }
