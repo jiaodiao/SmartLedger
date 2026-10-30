@@ -545,15 +545,16 @@ fun SettingsScreen(
             } else {
                 msg
             },
-            confirmText = if (retryInfo != null) "重新下载" else "好的",
+            confirmText = if (retryInfo != null) "重新下载" else "打开下载页",
             onConfirm = {
                 if (retryInfo != null) {
                     startApkDownload(retryInfo)
                 } else {
+                    com.smartledger.util.UpdateChecker.openLatestReleasePage(context)
                     updateError = null
                 }
             },
-            dismissText = if (retryInfo != null) "取消" else "",
+            dismissText = if (retryInfo != null) "取消" else "关闭",
             onDismiss = { updateError = null }
         )
     }

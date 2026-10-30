@@ -22,7 +22,18 @@ object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
     private const val REPO = "jiaodiao/SmartLedger"
-    private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
+    private const val PRIMARY_API_URL = "https://api.github.com/repos/$REPO/releases/latest"
+    private const val RELEASES_LATEST_HTML = "https://github.com/$REPO/releases/latest"
+
+    /**
+     * 检查更新接口：官方 API 优先，失败再试公开镜像（缓解部分网络对 api.github.com 的 403）。
+     * 镜像列表以构建前 curl 可用性为准；失效的不再硬编码。
+     */
+    private val CHECK_API_URLS = listOf(
+        PRIMARY_API_URL,
+        "https://gh-proxy.com/https://api.github.com/repos/$REPO/releases/latest",
+        "https://edgeone.gh-proxy.com/https://api.github.com/repos/$REPO/releases/latest",
+    )
 
     data class UpdateInfo(
         val versionName: String,      // e.g. "v1.0.3"
@@ -68,32 +79,13 @@ object UpdateChecker {
         val currentLabel = currentVersionLabel(context)
         val local = currentLabel.removePrefix("v")
         try {
-            val url = URL(API_URL)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-            conn.setRequestProperty("User-Agent", "SmartLedger-Android")
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-
-            val code = conn.responseCode
-            if (code != 200) {
-                val err = try {
-                    conn.errorStream?.bufferedReader()?.readText()
-                } catch (_: Exception) {
-                    null
-                }
-                conn.disconnect()
-                Log.w(TAG, "GitHub API returned $code $err")
-                return@withContext CheckResult.Failed("无法连接更新服务（$code），请稍后重试")
-            }
-
-            val body = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-
-            val json = JSONObject(body)
+            val fetched = fetchLatestReleaseJson()
+            val json = JSONObject(fetched.body)
             val tagName = json.getString("tag_name")           // e.g. "v1.0.3"
             val releaseNotes = stripMarkdown(json.optString("body", ""))
-            val htmlUrl = json.getString("html_url")
+            val htmlUrl = json.optString("html_url", RELEASES_LATEST_HTML).ifBlank {
+                RELEASES_LATEST_HTML
+            }
 
             var apkUrl: String? = null
             val assets = json.optJSONArray("assets")
@@ -106,9 +98,10 @@ object UpdateChecker {
                     }
                 }
             }
+            apkUrl = maybeProxyGithubUrl(apkUrl, fetched.sourceUrl)
 
             val remote = tagName.removePrefix("v")
-            Log.d(TAG, "local=$local remote=$remote tag=$tagName")
+            Log.d(TAG, "local=$local remote=$remote tag=$tagName via=${fetched.sourceUrl}")
 
             if (isNewerVersion(local, remote)) {
                 CheckResult.HasUpdate(
@@ -124,8 +117,75 @@ object UpdateChecker {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Check update failed", e)
-            CheckResult.Failed("检查更新失败：${e.message ?: "网络异常"}")
+            CheckResult.Failed(
+                "检查更新失败：${e.message ?: "网络异常"}。可打开 GitHub 下载页手动安装。"
+            )
         }
+    }
+
+    private data class FetchedRelease(val body: String, val sourceUrl: String)
+
+    /**
+     * 依次请求官方 API 与镜像，返回首个含 tag_name 的 JSON。
+     */
+    private fun fetchLatestReleaseJson(): FetchedRelease {
+        var lastDetail = "无可用更新源"
+        for (apiUrl in CHECK_API_URLS) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                    setRequestProperty("Accept", "application/vnd.github.v3+json")
+                    setRequestProperty("User-Agent", "SmartLedger-Android")
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    instanceFollowRedirects = true
+                }
+                val code = conn.responseCode
+                if (code != 200) {
+                    val err = try {
+                        conn.errorStream?.bufferedReader()?.readText()?.take(200)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    lastDetail = "HTTP $code"
+                    Log.w(TAG, "update check $apiUrl -> $code ${err.orEmpty()}")
+                    continue
+                }
+                val body = conn.inputStream.bufferedReader().readText()
+                val tag = try {
+                    JSONObject(body).optString("tag_name", "")
+                } catch (_: Exception) {
+                    ""
+                }
+                if (tag.isBlank()) {
+                    lastDetail = "响应缺少 tag_name"
+                    Log.w(TAG, "update check $apiUrl returned JSON without tag_name")
+                    continue
+                }
+                Log.i(TAG, "update check succeeded via $apiUrl tag=$tag")
+                return FetchedRelease(body, apiUrl)
+            } catch (e: Exception) {
+                lastDetail = e.message ?: e.javaClass.simpleName
+                Log.w(TAG, "update check $apiUrl failed: $lastDetail")
+            } finally {
+                conn?.disconnect()
+            }
+        }
+        error(lastDetail)
+    }
+
+    /**
+     * 若 JSON 来自镜像，将 github.com 资源链接改走同一镜像前缀，便于应用内下载。
+     */
+    private fun maybeProxyGithubUrl(url: String?, sourceApiUrl: String): String? {
+        if (url.isNullOrBlank()) return url
+        if (sourceApiUrl == PRIMARY_API_URL) return url
+        if (!url.startsWith("https://github.com/")) return url
+        val marker = "https://api.github.com/"
+        val idx = sourceApiUrl.indexOf(marker)
+        if (idx <= 0) return url
+        val prefix = sourceApiUrl.substring(0, idx)
+        return prefix + url
     }
 
     private fun apkCacheFiles(context: Context, info: UpdateInfo): Triple<File, File, File> {
@@ -363,6 +423,17 @@ object UpdateChecker {
         context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         })
+    }
+
+    /**
+     * 检查更新全部失败时，打开仓库最新 Release 网页供手动下载。
+     */
+    fun openLatestReleasePage(context: Context) {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_LATEST_HTML)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
     }
 
     private fun stripMarkdown(md: String): String {
