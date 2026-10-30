@@ -145,6 +145,13 @@ class PaymentNotificationListener : NotificationListenerService() {
             notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
         val isMonitoredEarly = isMonitoredPackage(packageName)
         val isBankPkgEarly = isBankPackage(packageName)
+        var diagnosticId = PaymentDiagnosticStore.begin(
+            applicationContext, packageName, title, content, isMonitoredEarly, notification, arrivedAt
+        )
+        var diagnosticParsed: ParsedPayment? = null
+        fun diagnose(status: String, reason: String = "", category: String? = null) {
+            PaymentDiagnosticStore.complete(applicationContext, diagnosticId, text, status, reason, diagnosticParsed, category)
+        }
 
         // 全渠道聚合补全：系统栏可能显示「[N条]…金额」，extras 却只有「[N条]」
         // 微信/支付宝/云闪付/抖音/京东淘宝/各银行 App 均适用
@@ -159,6 +166,15 @@ class PaymentNotificationListener : NotificationListenerService() {
                 content = enriched.content
                 eventTime = enriched.eventTime
                 adoptedChildKey = enriched.childKey
+                diagnosticId?.let { id ->
+                    if (PaymentDiagnosticPolicy.shouldRecord(packageName, enriched.title, enriched.content, isMonitoredEarly)) {
+                        PaymentDiagnosticStore.addChildFields(applicationContext, id, enriched.notification)
+                    } else {
+                        // 诊断不保存无法确认支付来源的子通知；原记账流程继续执行。
+                        PaymentDiagnosticStore.discard(applicationContext, id)
+                        diagnosticId = null
+                    }
+                }
                 text = NotificationParser.normalizeNotificationText("$title $content")
                 Log.d(TAG, "Enriched grouped pay notice ($packageName): $text")
             } else {
@@ -178,10 +194,12 @@ class PaymentNotificationListener : NotificationListenerService() {
             }
         }.distinct()
         if (noticeKeys.any { ProcessedNoticeStore.isProcessed(applicationContext, it) }) {
+            diagnose("已跳过重复记录", "同一通知已处理，本次不再入账")
             Log.d(TAG, "Skip replayed notice: pkg=$packageName text=$text")
             return
         }
         if (isStaleGroupedReplay(sbn, text)) {
+            diagnose("已跳过重复记录", "分组摘要重复展示已处理的旧支付通知")
             noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
             Log.d(TAG, "Skip stale grouped notice: pkg=$packageName text=$text")
             return
@@ -192,6 +210,7 @@ class PaymentNotificationListener : NotificationListenerService() {
             val looksLikePay = NotificationParser.looksLikeLedgerChild(text) ||
                 text.contains("已支付") || text.contains("付款") || text.contains("动账")
             if (!isMonitoredEarly || !looksLikePay) {
+                diagnose("已过滤", "分组摘要未提供可识别的支付信息")
                 Log.d(TAG, "Skip group summary: pkg=$packageName text=$text")
                 return
             }
@@ -206,12 +225,14 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         // 白条 / 花呗 / 借呗 / 金条等信贷支付：不记账
         if (NotificationParser.isCreditProductPayment(text)) {
+            diagnose("已过滤", "当前记账规则排除信贷产品支付")
             Log.d(TAG, "Credit product payment, skip: $text")
             return
         }
 
         // 营销 / 额度 / 物流 / 提现提醒等
         if (NotificationParser.isPromotionalOrNonPayment(text)) {
+            diagnose("已过滤", "被现有规则判断为营销或非真实收支通知")
             Log.d(TAG, "Promotional/non-payment, skip: $text")
             return
         }
@@ -245,6 +266,7 @@ class PaymentNotificationListener : NotificationListenerService() {
             !NotificationParser.hasStrongPaymentSignal(text)
         ) {
             Log.d(TAG, "Bank-related without ledger signal, skip: $text")
+            diagnose("未识别", "银行相关通知中未发现明确动账或支付确认信号")
             return
         }
 
@@ -261,6 +283,7 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         // 微信/支付宝/抖音/电商：无明确支付确认时直接跳过（防企业号「每天5元干饭」）
         if ((isShopping || isChatPay) && !NotificationParser.hasStrongPaymentSignal(text)) {
+            diagnose("未识别", "未发现明确支付确认信号；可能缺少金额或正文不完整")
             Log.d(TAG, "Chat/shopping without pay confirm, skip: $text")
             return
         }
@@ -270,18 +293,21 @@ class PaymentNotificationListener : NotificationListenerService() {
             // 银行动账截断可能只有「支出(...)35」；其它仍需关键词或强信号
             val bankOk = isBankRelated && NotificationParser.hasBankLedgerSignal(text) && hasAmount
             if (isShopping || isChatPay || (!bankOk && !(isMonitoredApp && hasAmount))) {
+                diagnose("未识别", "未发现可用于记账的收支关键词或金额信号")
                 Log.d(TAG, "Not monitored app or no amount (or promo app), skipping")
                 return
             }
         }
 
         if (!isMonitoredApp && !isBankRelated) {
+            diagnose("已过滤", "不属于当前支持的支付渠道")
             Log.d(TAG, "Not monitored app and not bank related, skipping")
             return
         }
 
         val parsed = NotificationParser.parse(title, content, packageName)
         if (parsed == null) {
+            diagnose("未识别", "解析器未能提取有效收支，可能为金额、格式或现有过滤规则不匹配")
             Log.d(TAG, "Parse failed for: $title - $content")
             if (isDebugEnabled()) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -294,6 +320,8 @@ class PaymentNotificationListener : NotificationListenerService() {
             }
             return
         }
+        diagnosticParsed = parsed
+        diagnose("处理中")
 
         Log.d(
             TAG,
@@ -320,11 +348,13 @@ class PaymentNotificationListener : NotificationListenerService() {
                 var confirmId: Long? = null
                 DedupHelper.exclusive {
                     if (noticeKeys.any { ProcessedNoticeStore.isProcessed(applicationContext, it) }) {
+                        diagnose("已跳过重复记录", "同一通知已在并发处理时完成记账或待确认")
                         return@exclusive
                     }
                     val db = AppDatabase.getInstance(applicationContext)
                     val dao = db.transactionDao()
                     if (noticeKeys.any { key -> dao.findByNoticeKey(key) != null }) {
+                        diagnose("已跳过重复记录", "账单中已存在该通知的处理记录")
                         noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
                         Log.d(TAG, "Skip notice already stored: $text")
                         return@exclusive
@@ -355,6 +385,11 @@ class PaymentNotificationListener : NotificationListenerService() {
                             parsed.notifyOrigin,
                         )
                         noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
+                        val categoryName = if (diagnosticId != null) runCatching {
+                            val actual = dao.getById(duplicate.id)
+                            categories.find { it.id == actual?.categoryId }?.name
+                        }.getOrNull() else null
+                        diagnose("已合并重复记录", "重复支付通知已合并到已有账单，没有新增账单", categoryName)
                         Log.d(
                             TAG,
                             "Duplicate absorbed: existing=${duplicate.paymentMethod}, " +
@@ -373,6 +408,7 @@ class PaymentNotificationListener : NotificationListenerService() {
                     )
                     if (shouldAskConfirm(parsed)) {
                         if (similarPending != null) {
+                            diagnose("已跳过重复记录", "已有同一支付的待确认记录")
                             noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
                             Log.d(TAG, "Similar confirm already pending, skip")
                             return@exclusive
@@ -393,6 +429,7 @@ class PaymentNotificationListener : NotificationListenerService() {
                             notifyOrigin = parsed.notifyOrigin,
                         )
                         noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
+                        diagnose("待确认", parsed.uncertainReason ?: "已设置为全部自动记账需确认")
                         return@exclusive
                     }
 
@@ -408,7 +445,7 @@ class PaymentNotificationListener : NotificationListenerService() {
                         }
                     }
 
-                    insertAutoTransaction(db, parsed, bookedAt, noticeKeys)
+                    insertAutoTransaction(db, parsed, bookedAt, noticeKeys, diagnosticId, text)
                     noticeKeys.forEach { ProcessedNoticeStore.mark(applicationContext, it) }
                 }
                 val pendingId = confirmId
@@ -416,6 +453,8 @@ class PaymentNotificationListener : NotificationListenerService() {
                     mainHandler.post { showConfirmUi(pendingId, parsed) }
                 }
             } catch (e: Exception) {
+                // 若已插入账单，后续提示失败不能把“已入账”误报成入账失败。
+                PaymentDiagnosticStore.failIfProcessing(applicationContext, diagnosticId, text)
                 Log.e(TAG, "Failed to save transaction", e)
             }
         }
@@ -459,8 +498,11 @@ class PaymentNotificationListener : NotificationListenerService() {
         parsed: ParsedPayment,
         eventTime: Long,
         noticeKeys: List<String>,
+        diagnosticId: String?,
+        diagnosticText: String,
     ) {
         var categoryId: Long? = null
+        var categoryName: String? = null
         try {
             val categories = db.categoryDao().getAllOnce()
             categoryId = SmartCategorizer.categorize(
@@ -470,6 +512,7 @@ class PaymentNotificationListener : NotificationListenerService() {
                 categories = categories,
                 type = parsed.type
             )
+            categoryName = categories.find { it.id == categoryId }?.name
         } catch (e: Exception) {
             Log.e(TAG, "Auto categorize failed", e)
         }
@@ -489,6 +532,8 @@ class PaymentNotificationListener : NotificationListenerService() {
             transactionTime = eventTime
         )
         val id = db.transactionDao().insert(transaction)
+        PaymentDiagnosticStore.complete(applicationContext, diagnosticId, diagnosticText,
+            "已入账", parsed = parsed, category = categoryName)
         Log.d(TAG, "Transaction saved: id=$id, type=${parsed.type}, time=$eventTime")
 
         com.smartledger.util.NotificationStyle.notifyPaymentDetected(
@@ -582,6 +627,7 @@ class PaymentNotificationListener : NotificationListenerService() {
         val content: String,
         val eventTime: Long,
         val childKey: String,
+        val notification: Notification,
     )
 
     /**
@@ -629,6 +675,7 @@ class PaymentNotificationListener : NotificationListenerService() {
             content = extracted.content,
             eventTime = childEvent,
             childKey = child.key,
+            notification = child.notification,
         )
     }
 

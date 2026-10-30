@@ -80,7 +80,7 @@ object CsvExporter {
             val date = dateFormat.format(Date(t.transactionTime))
             val time = timeFormat.format(Date(t.transactionTime))
             val type = if (t.type == "expense") "支出" else "收入"
-            val category = t.categoryId?.let { categoryMap[it]?.name } ?: "未分类"
+            val category = escapeCsv(t.categoryId?.let { categoryMap[it]?.name } ?: "未分类")
             val merchant = escapeCsv(t.merchant ?: "")
             val method = escapeCsv(t.paymentMethod ?: "")
             val note = escapeCsv(t.note ?: "")
@@ -92,7 +92,7 @@ object CsvExporter {
     }
 
     private fun escapeCsv(value: String): String {
-        return if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+        return if (value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
             "\"${value.replace("\"", "\"\"")}\""
         } else {
             value

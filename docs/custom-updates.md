@@ -1,5 +1,7 @@
 # 定制版更新
 
+功能定制及上游合并保留清单统一维护在 [用户定制功能与合并参考](customizations.md)。构建发布前先核对该清单；用户当前安排由 Grok Bot 构建发布，本地只修改并推送源码，不另外交付测试安装包。
+
 更新来源：`jiaodiao/SmartLedger` 的最新正式 GitHub Release。
 首次接入版本：`1.0.28.1`，`versionCode = 30`，对应上游 `1.0.28`。
 

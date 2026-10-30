@@ -3,6 +3,9 @@ package com.smartledger.ui.category
 import android.app.Application
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,6 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,7 +32,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.smartledger.SmartLedgerApp
 import com.smartledger.data.db.entity.Category
 import com.smartledger.ui.components.SmartLedgerDialog
-import com.smartledger.ui.components.SmartLedgerInputDialog
 import com.smartledger.ui.theme.SmartLedgerColors
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -150,9 +155,10 @@ fun CategoryManageScreen(
 
     // ═══ 添加分类弹窗 ═══
     if (showAddDialog) {
-        AddCategoryDialog(
-            type = selectedType,
-            onAdd = { name, color ->
+        CategoryEditorDialog(
+            title = "添加${if (selectedType == "expense") "支出" else "收入"}分类",
+            confirmText = "添加",
+            onSave = { name, color ->
                 viewModel.insertCategory(name, selectedType, color)
                 showAddDialog = false
             },
@@ -162,9 +168,15 @@ fun CategoryManageScreen(
 
     // ═══ 编辑分类弹窗 ═══
     if (editingCategory != null) {
-        EditCategoryDialog(
-            category = editingCategory!!,
-            onSave = { viewModel.updateCategory(it); editingCategory = null },
+        CategoryEditorDialog(
+            title = "编辑分类",
+            confirmText = "保存",
+            initialName = editingCategory!!.name,
+            initialColor = editingCategory!!.color,
+            onSave = { name, color ->
+                viewModel.updateCategory(editingCategory!!.copy(name = name, color = color))
+                editingCategory = null
+            },
             onDismiss = { editingCategory = null }
         )
     }
@@ -211,13 +223,13 @@ private fun CategoryItem(
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .background(SmartLedgerColors.surfaceHover, RoundedCornerShape(10.dp)),
+                .background(Color(category.color).copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 getCategoryIcon(category.name),
                 contentDescription = category.name,
-                tint = SmartLedgerColors.fgSecondary,
+                tint = Color(category.color),
                 modifier = Modifier.size(22.dp)
             )
         }
@@ -253,87 +265,82 @@ private fun CategoryItem(
 }
 
 @Composable
-private fun AddCategoryDialog(
-    type: String,
-    onAdd: (String, Long) -> Unit,
+private fun CategoryEditorDialog(
+    title: String,
+    confirmText: String,
+    initialName: String = "",
+    initialColor: Long = categoryColors.first().second,
+    onSave: (String, Long) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    val colors = listOf(0xFFD94848, 0xFF3E63DD, 0xFF2D9D63, 0xFF9C27B0, 0xFFFF7043, 0xFF795548)
-    var selectedColor by remember { mutableStateOf(colors[0]) }
+    var name by remember { mutableStateOf(initialName) }
+    var selectedColor by remember { mutableStateOf(initialColor) }
 
-    com.smartledger.ui.components.SmartLedgerDialog(
+    SmartLedgerDialog(
         onDismissRequest = onDismiss,
-        title = "添加${if (type == "expense") "支出" else "收入"}分类",
-        confirmText = "添加",
+        title = title,
+        confirmText = confirmText,
         onConfirm = {
-            if (name.isNotBlank()) onAdd(name, selectedColor)
+            if (name.isNotBlank()) onSave(name.trim(), selectedColor)
         },
         dismissText = "取消",
         onDismiss = onDismiss,
         content = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("分类名称") },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = SmartLedgerColors.accent,
-                    focusedLabelColor = SmartLedgerColors.accent,
-                    cursorColor = SmartLedgerColors.accent
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("分类名称") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SmartLedgerColors.accent,
+                        focusedLabelColor = SmartLedgerColors.accent,
+                        cursorColor = SmartLedgerColors.accent
+                    )
                 )
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("选择颜色", style = MaterialTheme.typography.labelMedium, color = SmartLedgerColors.fgSecondary)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                colors.forEach { color ->
-                    val selected = selectedColor == color
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color(color), RoundedCornerShape(10.dp))
-                            .clickable { selectedColor = color }
-                    ) {
-                        if (selected) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("选择颜色", style = MaterialTheme.typography.labelMedium, color = SmartLedgerColors.fgSecondary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(Modifier.size(16.dp).background(Color(selectedColor), RoundedCornerShape(4.dp)))
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                categoryColors.chunked(6).forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { (label, color) ->
+                            val selected = selectedColor == color
                             Box(
                                 modifier = Modifier
-                                    .matchParentSize()
-                                    .padding(2.dp)
-                                    .background(Color.Transparent, RoundedCornerShape(8.dp)),
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(color), RoundedCornerShape(10.dp))
+                                    .semantics { contentDescription = label }
+                                    .selectable(selected = selected, role = Role.RadioButton) { selectedColor = color },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
+                                if (selected) {
+                                    Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
         }
     )
 }
 
-@Composable
-private fun EditCategoryDialog(
-    category: Category,
-    onSave: (Category) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var name by remember { mutableStateOf(category.name) }
-
-    SmartLedgerInputDialog(
-        onDismissRequest = onDismiss,
-        title = "编辑分类",
-        label = "分类名称",
-        value = name,
-        onValueChange = { name = it },
-        confirmText = "保存",
-        onConfirm = {
-            if (name.isNotBlank()) onSave(category.copy(name = name))
-        }
-    )
-}
+private val categoryColors = listOf(
+    "红色" to 0xFFD94848, "蓝色" to 0xFF3E63DD, "绿色" to 0xFF2D9D63,
+    "紫色" to 0xFF9C27B0, "橙色" to 0xFFFF7043, "棕色" to 0xFF795548,
+    "玫红" to 0xFFC2185B, "靛蓝" to 0xFF5C6BC0, "青色" to 0xFF00838F,
+    "琥珀" to 0xFFB77900, "草绿" to 0xFF6B8E23, "灰蓝" to 0xFF546E7A,
+    "珊瑚" to 0xFFE57373, "天蓝" to 0xFF0288D1, "蓝绿" to 0xFF00897B,
+    "深紫" to 0xFF673AB7, "赭色" to 0xFFB45309, "灰色" to 0xFF757575
+)
 
 private fun getCategoryIcon(name: String): ImageVector {
     return when (name) {

@@ -442,7 +442,13 @@ fun MainApp() {
                 com.smartledger.ui.settings.SettingsScreen(
                     onBack = { navController.popBackStack() },
                     onNavigateToFeedback = { navController.navigate("feedback") },
-                    onNavigateToPrivacy = { navController.navigate("privacy") }
+                    onNavigateToPrivacy = { navController.navigate("privacy") },
+                    onNavigateToDiagnostics = { navController.navigate("payment-diagnostics") }
+                )
+            }
+            composable("payment-diagnostics") {
+                com.smartledger.ui.settings.PaymentDiagnosticScreen(
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable("feedback") {
@@ -673,11 +679,11 @@ fun MainApp() {
                 if (!isRestoring) {
                     isRestoring = true
                     coroutineScope.launch {
-                        val count = com.smartledger.util.CsvImporter.restore(context, backupFileToRestore!!)
+                        val result = com.smartledger.util.CsvImporter.restore(context, backupFileToRestore!!)
                         isRestoring = false
                         showRestoreDialog = false
-                        if (count > 0) {
-                            android.widget.Toast.makeText(context, "已恢复 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_LONG).show()
+                        if (result.success) {
                             // 触发首页刷新
                             isFirstLaunch = false
                         }

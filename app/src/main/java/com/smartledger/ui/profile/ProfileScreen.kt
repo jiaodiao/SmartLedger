@@ -153,7 +153,7 @@ fun ProfileScreen(
                 )
                 MenuItem(
                     icon = Icons.Outlined.SaveAlt,
-                    label = "数据备份",
+                    label = "导入与备份",
                     onClick = onNavigateToBackup
                 )
                 HorizontalDivider(

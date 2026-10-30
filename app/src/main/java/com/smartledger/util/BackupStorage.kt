@@ -196,10 +196,8 @@ object BackupStorage {
     fun countCsvRecords(context: Context, entry: Entry): Int {
         return try {
             openReader(context, entry)?.use { reader ->
-                var n = 0
-                reader.readLine() // header
-                reader.lineSequence().forEach { if (it.isNotBlank()) n++ }
-                n
+                val data = CsvImportFormat.parse(reader)
+                data.rows.size + data.invalid
             } ?: 0
         } catch (_: Exception) {
             0

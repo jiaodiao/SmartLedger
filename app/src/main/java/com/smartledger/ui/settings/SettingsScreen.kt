@@ -38,7 +38,8 @@ import com.smartledger.ui.theme.ThemeMode
 fun SettingsScreen(
     onBack: () -> Unit = {},
     onNavigateToFeedback: () -> Unit = {},
-    onNavigateToPrivacy: () -> Unit = {}
+    onNavigateToPrivacy: () -> Unit = {},
+    onNavigateToDiagnostics: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("smart_ledger", Context.MODE_PRIVATE)
@@ -249,6 +250,12 @@ fun SettingsScreen(
                     colors = CardDefaults.cardColors(containerColor = SmartLedgerColors.surface)
                 ) {
                     Column {
+                        MenuSettingItem(
+                            icon = Icons.Outlined.Info,
+                            label = "最近识别详情",
+                            onClick = onNavigateToDiagnostics
+                        )
+                        DividerLine()
                         SwitchItem(
                             icon = Icons.Outlined.Info,
                             label = "模糊账单需确认",
